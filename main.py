@@ -10,6 +10,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from fastapi import FastAPI
+from uvicorn import Config, Server
 import sys
 
 load_dotenv()
@@ -90,7 +93,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def roles_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text='Воркер', callback_data='role_hacker'),
+        InlineKeyboardButton(text='Воркер', callback_data='role_work'),
         InlineKeyboardButton(text='Пентестер', callback_data='role_pentester')
     )
     kb.row(
@@ -140,27 +143,20 @@ async def cmd_start(message: types.Message):
     )
     user_messages[message.from_user.id] = sent.message_id
 
-# ---------------- Выбор роли ----------------
 @dp.callback_query(lambda c: c.data == 'role_menu')
 async def cb_role_menu(callback: types.CallbackQuery):
     if not await require_not_banned_or_rate_limited(callback):
         return
-
     uid = callback.from_user.id
     msg_id = user_messages.get(uid)
     new_caption = (
         "👋 Добро пожаловать в наш бот!\n\n"
-        "Здесь вы можете:\n"
-        "• Получить доступ к закрытой группе\n"
-        "• Представить свои навыки и выбрать роль\n"
-        "• Участвовать в обсуждениях и проектах\n\n"
         "Выберите вашу роль:"
     )
     if msg_id:
         await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption, reply_markup=roles_keyboard())
     await callback.answer()
 
-# ---------------- Callback для выбора роли ----------------
 @dp.callback_query(lambda c: c.data.startswith('role_'))
 async def cb_role(callback: types.CallbackQuery):
     if not await require_not_banned_or_rate_limited(callback):
@@ -177,7 +173,6 @@ async def cb_role(callback: types.CallbackQuery):
         await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption, reply_markup=captcha_keyboard(answer))
     await callback.answer()
 
-# ---------------- Callback для капчи ----------------
 @dp.callback_query(lambda c: c.data.startswith('captcha_'))
 async def cb_captcha(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -192,12 +187,11 @@ async def cb_captcha(callback: types.CallbackQuery):
     req['captcha_done'] = True
 
     msg_id = user_messages.get(uid)
-    new_caption = "✅ Верно!\n\nТеперь напишите ваши навыки (например: Python, pentesting):"
+    new_caption = "✅ Верно!\n\nТеперь напишите ваши навыки:"
     if msg_id:
         await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption)
     await callback.answer()
 
-# ---------------- Хэндлер текста для навыков ----------------
 @dp.message()
 async def cb_skills(message: types.Message):
     if message.from_user.is_bot:
@@ -211,7 +205,6 @@ async def cb_skills(message: types.Message):
     req['skills'] = message.text
     req['username'] = message.from_user.username or message.from_user.full_name
 
-    # Отправка заявки админам
     admin_text = f"🆕 Новая заявка от {req['username']} (id: {uid})\nРоль: {req['role']}\nНавыки: {req['skills']}"
     for admin in ADMIN_IDS:
         try:
@@ -221,7 +214,6 @@ async def cb_skills(message: types.Message):
     await message.answer("🔔 Ваша заявка отправлена админам.")
     del pending_requests[uid]
 
-# ---------------- Админские решения ----------------
 @dp.callback_query(lambda c: c.data.startswith('approve:') or c.data.startswith('deny:'))
 async def cb_admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -240,7 +232,6 @@ async def cb_admin_decision(callback: types.CallbackQuery):
             await bot.delete_message(chat_id=uid, message_id=msg_id)
         return
 
-    # approve
     try:
         invite = await bot.create_chat_invite_link(
             chat_id=GROUP_CHAT_ID,
@@ -253,24 +244,24 @@ async def cb_admin_decision(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Ошибка при создании ссылки: {e}")
 
-# ---------------- Startup / Shutdown ----------------
-async def on_startup():
-    logger.info("Bot starting...")
+# ---------------- FastAPI для Render ----------------
+app = FastAPI()
 
-async def on_shutdown():
-    logger.info("Bot shutting down")
-    try:
-        await bot.session.close()
-    except:
-        pass
+@app.get("/")
+async def root():
+    return {"status": "ok"}
 
-# ---------------- Runner ----------------
+async def main():
+    port = int(os.environ.get("PORT", 10000))
+    config = Config(app=app, host="0.0.0.0", port=port, log_level="info")
+    server = Server(config)
+
+    await asyncio.gather(
+        server.serve(),
+        dp.start_polling(bot)
+    )
+
 if __name__ == "__main__":
     if sys.platform == 'win32' or os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    try:
-        asyncio.run(dp.start_polling(bot, on_startup=on_startup, on_shutdown=on_shutdown))
-    except KeyboardInterrupt:
-        logger.info("Stopped by user")
-    except Exception:
-        logger.exception("Unexpected error while running the bot")
+    asyncio.run(main())
