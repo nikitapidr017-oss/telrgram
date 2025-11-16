@@ -127,8 +127,6 @@ python-telegram-bot==20.3
 pythonping==1.1.4
 pytweening==1.2.0
 pytz==2024.1
-pywin32==306
-pywin32-ctypes==0.2.3
 PyYAML==6.0.2
 pyzipper==0.3.6
 query==0.1.4
