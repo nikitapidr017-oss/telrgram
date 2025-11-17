@@ -93,7 +93,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def roles_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text='Воркер', callback_data='role_work'),
+        InlineKeyboardButton(text='Медведь', callback_data='role_work'),
         InlineKeyboardButton(text='Пентестер', callback_data='role_pentester')
     )
     kb.row(
@@ -265,3 +265,4 @@ if __name__ == "__main__":
     if sys.platform == 'win32' or os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+
