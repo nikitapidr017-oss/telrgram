@@ -32,7 +32,7 @@ INVITE_EXPIRE_SECONDS = 300
 INVITE_MEMBER_LIMIT = 1
 
 # Баннер через file_id
-BANNER_FILE_ID = "AgACAgQAAxkBAAMsaRoDBjrsy-bCV-gDXcCJu7VySdYAAtkLaxvCmdBQQZkbSzb5uOgBAAMCAAN4AAM2BA"
+BANNER_FILE_ID = "AgACAgQAAxkBAAMHaRpp_OjCCZsBPbpW207YOrlenpsAArINaxuq4NBQWfO04PncVXYBAAMCAAN4AAM2BA"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -265,4 +265,5 @@ if __name__ == "__main__":
     if sys.platform == 'win32' or os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+
 
