@@ -8,24 +8,20 @@ from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from fastapi import FastAPI
-from uvicorn import Config, Server
-import sys
+from fastapi import FastAPI, Request
+import uvicorn
 
 load_dotenv()
 
 # ---------------- CONFIG ----------------
 TOKEN = os.getenv('TG_BOT_TOKEN')
 ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_IDS', '123456789').split(',')]
-GROUP_CHAT_ID = os.getenv('TG_GROUP_CHAT_ID')
-if GROUP_CHAT_ID:
-    try:
-        GROUP_CHAT_ID = int(GROUP_CHAT_ID)
-    except ValueError:
-        pass
+GROUP_CHAT_ID = int(os.getenv('TG_GROUP_CHAT_ID', "0"))
+
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ВАЖНО: укажешь свой Render URL
 
 RATE_LIMIT_PER_MIN = 6
 INVITE_EXPIRE_SECONDS = 300
@@ -64,24 +60,29 @@ async def require_not_banned_or_rate_limited(event: types.Message | types.Callba
     if not user:
         return False
     uid = user.id
+
     if await is_banned(uid):
         try:
+            msg = "🚫 Вы забанены."
             if isinstance(event, types.CallbackQuery):
-                await event.answer('🚫 Вы забанены.', show_alert=True)
+                await event.answer(msg, show_alert=True)
             else:
-                await event.answer('🚫 Вы забанены.')
-        except Exception:
+                await event.answer(msg)
+        except:
             pass
         return False
+
     if await check_rate_limit(uid):
         try:
+            msg = "⏳ Слишком много запросов. Попробуйте через минуту."
             if isinstance(event, types.CallbackQuery):
-                await event.answer('⏳ Слишком много запросов. Попробуйте через минуту.', show_alert=True)
+                await event.answer(msg, show_alert=True)
             else:
-                await event.answer('⏳ Слишком много запросов. Попробуйте через минуту.')
-        except Exception:
+                await event.answer(msg)
+        except:
             pass
         return False
+
     return True
 
 # ---------------- UI ----------------
@@ -103,12 +104,12 @@ def roles_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 def captcha_keyboard(correct: int) -> InlineKeyboardMarkup:
-    options = [correct]
+    options = {correct}
     while len(options) < 4:
-        n = random.randint(2, 18)
-        if n not in options:
-            options.append(n)
+        options.add(random.randint(2, 18))
+    options = list(options)
     random.shuffle(options)
+
     kb = InlineKeyboardBuilder()
     kb.row(*[InlineKeyboardButton(text=str(x), callback_data=f'captcha_{x}') for x in options])
     return kb.as_markup()
@@ -132,15 +133,17 @@ async def cmd_start(message: types.Message):
         "Здесь вы можете:\n"
         "• Получить доступ к закрытой группе\n"
         "• Представить свои навыки и выбрать роль\n"
-        "• Участвовать в обсуждениях и проектах\n\n"
-        "Нажмите кнопку ниже, чтобы продолжить:"
+        "• Участвовать в проектах\n\n"
+        "⬇ Нажмите кнопку ниже:"
     )
+
     sent = await bot.send_photo(
         chat_id=message.chat.id,
         photo=BANNER_FILE_ID,
         caption=text,
         reply_markup=main_menu_keyboard()
     )
+
     user_messages[message.from_user.id] = sent.message_id
 
 @dp.callback_query(lambda c: c.data == 'role_menu')
@@ -149,85 +152,117 @@ async def cb_role_menu(callback: types.CallbackQuery):
         return
     uid = callback.from_user.id
     msg_id = user_messages.get(uid)
-    new_caption = (
-        "👋 Добро пожаловать в наш бот!\n\n"
-        "Выберите вашу роль:"
-    )
+
     if msg_id:
-        await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption, reply_markup=roles_keyboard())
+        await bot.edit_message_caption(
+            chat_id=uid,
+            message_id=msg_id,
+            caption="Выберите вашу роль:",
+            reply_markup=roles_keyboard()
+        )
+
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith('role_'))
 async def cb_role(callback: types.CallbackQuery):
     if not await require_not_banned_or_rate_limited(callback):
         return
+
     uid = callback.from_user.id
     role = callback.data.split('_')[1]
+
     a, b = random.randint(2, 9), random.randint(1, 9)
     answer = a + b
-    pending_requests[uid] = {'role': role, 'captcha_answer': answer, 'captcha_done': False, 'skills': None}
+
+    pending_requests[uid] = {
+        'role': role,
+        'captcha_answer': answer,
+        'captcha_done': False,
+        'skills': None
+    }
 
     msg_id = user_messages.get(uid)
-    new_caption = f"Вы выбрали роль: {role}\n\nРешите капчу: {a} + {b}"
     if msg_id:
-        await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption, reply_markup=captcha_keyboard(answer))
+        await bot.edit_message_caption(
+            chat_id=uid,
+            message_id=msg_id,
+            caption=f"Вы выбрали роль: {role}\n\nРешите капчу: {a} + {b}",
+            reply_markup=captcha_keyboard(answer)
+        )
+
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith('captcha_'))
 async def cb_captcha(callback: types.CallbackQuery):
     uid = callback.from_user.id
+
     if uid not in pending_requests:
         await callback.answer("Сначала выберите роль.", show_alert=True)
         return
+
     req = pending_requests[uid]
     provided = int(callback.data.split('_')[1])
+
     if provided != req['captcha_answer']:
         await callback.answer("❌ Неправильно!", show_alert=True)
         return
+
     req['captcha_done'] = True
 
     msg_id = user_messages.get(uid)
-    new_caption = "✅ Верно!\n\nТеперь напишите ваши навыки:"
     if msg_id:
-        await bot.edit_message_caption(chat_id=uid, message_id=msg_id, caption=new_caption)
+        await bot.edit_message_caption(
+            chat_id=uid,
+            message_id=msg_id,
+            caption="✅ Верно!\n\nТеперь напишите ваши навыки:"
+        )
+
     await callback.answer()
 
 @dp.message()
 async def cb_skills(message: types.Message):
-    if message.from_user.is_bot:
-        return
     uid = message.from_user.id
+
     if uid not in pending_requests:
         return
+
     req = pending_requests[uid]
-    if not req.get('captcha_done'):
+
+    if not req['captcha_done']:
         return
+
     req['skills'] = message.text
     req['username'] = message.from_user.username or message.from_user.full_name
 
-    admin_text = f"🆕 Новая заявка от {req['username']} (id: {uid})\nРоль: {req['role']}\nНавыки: {req['skills']}"
+    admin_text = (
+        f"🆕 Новая заявка от @{req['username']} (ID: {uid})\n"
+        f"Роль: {req['role']}\n"
+        f"Навыки: {req['skills']}"
+    )
+
     for admin in ADMIN_IDS:
         try:
             await bot.send_message(admin, admin_text, reply_markup=admin_keyboard(uid))
-        except Exception as e:
-            logger.warning('Не удалось отправить админу %s: %s', admin, e)
+        except:
+            pass
+
     await message.answer("🔔 Ваша заявка отправлена админам.")
     del pending_requests[uid]
 
 @dp.callback_query(lambda c: c.data.startswith('approve:') or c.data.startswith('deny:'))
 async def cb_admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer('Только админ.', show_alert=True)
+        await callback.answer("Только админ.", show_alert=True)
         return
+
     await callback.answer()
+
     action, uid_s = callback.data.split(':')
     uid = int(uid_s)
     msg_id = user_messages.get(uid)
 
     if action == 'deny':
-        try:
-            await bot.send_message(uid, '❌ Ваша заявка отклонена.')
-        except: pass
+        await bot.send_message(uid, "❌ Ваша заявка отклонена.")
         if msg_id:
             await bot.delete_message(chat_id=uid, message_id=msg_id)
         return
@@ -238,32 +273,40 @@ async def cb_admin_decision(callback: types.CallbackQuery):
             expire_date=int(time.time()) + INVITE_EXPIRE_SECONDS,
             member_limit=INVITE_MEMBER_LIMIT
         )
-        await bot.send_message(uid, f"🎉 Ваша заявка одобрена! Ссылка: {invite.invite_link}")
+        await bot.send_message(uid, f"🎉 Заявка одобрена!\n🔗 Ссылка: {invite.invite_link}")
+
         if msg_id:
             await bot.delete_message(chat_id=uid, message_id=msg_id)
-    except Exception as e:
-        logger.error(f"Ошибка при создании ссылки: {e}")
 
-# ---------------- FastAPI для Render ----------------
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+
+# ---------------- FASTAPI + WEBHOOK ----------------
 app = FastAPI()
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update(**data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
 @app.get("/")
 async def root():
-    return {"status": "ok"}
+    return {"status": "running"}
 
-async def main():
-    port = int(os.environ.get("PORT", 10000))
-    config = Config(app=app, host="0.0.0.0", port=port, log_level="info")
-    server = Server(config)
+async def on_startup():
+    await bot.delete_webhook()
+    await bot.set_webhook(WEBHOOK_URL)
 
-    await asyncio.gather(
-        server.serve(),
-        dp.start_polling(bot)
+def start():
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 10000)),
+        reload=False
     )
 
 if __name__ == "__main__":
-    if sys.platform == 'win32' or os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
-
-
+    asyncio.run(on_startup())
+    start()
